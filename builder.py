@@ -12,7 +12,7 @@ from botocore.exceptions import NoCredentialsError
 
 # 실제 환경에서는 환경변수나 SQS payload 파싱해서 받아야 함 ! Task 정의 등
 REPO_URL = os.environ.get('REPO_URL')
-USERNAME = os.environ.get('USERNAME')
+USER_ID = os.environ.get('USER_ID')
 DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 PROJECT_ROOT = "/app/source"
@@ -98,7 +98,7 @@ def upload_to_s3(local_path):
             relative_path = os.path.relpath(local_file_path, local_path)
             
             # 이게 우리 DB에 들어갈 s3_path 
-            s3_key = f"users/{USERNAME}/{DEPLOYMENT_ID}/{relative_path}"
+            s3_key = f"users/{USER_ID}/{DEPLOYMENT_ID}/{relative_path}"
             
             content_type, _ = mimetypes.guess_type(local_file_path)
             if content_type is None:
@@ -117,13 +117,18 @@ def upload_to_s3(local_path):
                 print("AWS Credentials not found")
                 raise
 
+def get_deploy_url():
+    return f"https://{USER_ID}-{DEPLOYMENT_ID}.qw1k.cloud"
+
+
 def main():
     try:
         clone_repo()
         install_dependencies_and_build()
         build_output_path = find_build_output()
         upload_to_s3(build_output_path)
-        print("=== Deployment Successful ===")
+        deploy_url = get_deploy_url()
+        print(f"Deployment URL: {deploy_url}")
     except Exception as e:
         print(f"=== Deployment Failed: {e} ===")
         sys.exit(1) # 실패하면 1로 종료하기
