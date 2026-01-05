@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import mimetypes
@@ -47,23 +48,27 @@ def clone_repo():
     
     run_command(["git", "clone", REPO_URL, PROJECT_ROOT])
 
+# 정적 사이트 여부 확인 (package.json 없으면 정적 사이트)
+def is_static_site():
+    return not os.path.exists(os.path.join(PROJECT_ROOT, 'package.json'))
+
 # npm, yarn, pnpm 중 하나를 감지하고 의존성 설치 및 빌드 수행하는 함수
 def install_dependencies_and_build():
     print("--- Step 2 & 3: Detect Manager, Install & Build ---")
-    
+
     cwd = PROJECT_ROOT
-    
+
     # Lock 파일을 기반으로 탐지
     if os.path.exists(os.path.join(cwd, 'yarn.lock')):
         print("Detected: Yarn")
         run_command(["yarn", "install", "--frozen-lockfile"], cwd=cwd)
         run_command(["yarn", "build"], cwd=cwd)
-        
+
     elif os.path.exists(os.path.join(cwd, 'pnpm-lock.yaml')):
         print("Detected: pnpm")
         run_command(["pnpm", "install", "--frozen-lockfile"], cwd=cwd)
         run_command(["pnpm", "build"], cwd=cwd)
-        
+
     else:
         # 기본값: npm (package-lock.json이 있거나 아무것도 없는 경우)
         print("Detected: npm")
@@ -71,7 +76,7 @@ def install_dependencies_and_build():
             run_command(["npm", "ci"], cwd=cwd) # Lock 파일 기반 클린 설치
         else:
             run_command(["npm", "install"], cwd=cwd) # Lock 파일 없을 때
-            
+
         run_command(["npm", "run", "build"], cwd=cwd)
 
 # 빌드 산출물 디렉토리 찾는 함수
@@ -120,14 +125,30 @@ def upload_to_s3(local_path):
 def get_deploy_url():
     return f"https://{USER_ID}-{DEPLOYMENT_ID}.qw1k.cloud"
 
+def print_debug_env():
+    print("=== [DEBUG] Current Environment Variables ===")
+    debug_env = dict(os.environ)
+
+    print(json.dumps(debug_env, indent=2))
+    print("===========================================")
 
 def main():
     try:
+        print_debug_env()
         clone_repo()
-        install_dependencies_and_build()
-        build_output_path = find_build_output()
+
+        # 정적 사이트 vs Node.js 프로젝트 분기 처리
+        if is_static_site():
+            print("--- Static Site Detected (No package.json) ---")
+            print("Skipping install & build steps...")
+            build_output_path = PROJECT_ROOT  # 프로젝트 루트가 곧 결과물
+        else:
+            install_dependencies_and_build()
+            build_output_path = find_build_output()
+
         upload_to_s3(build_output_path)
         deploy_url = get_deploy_url()
+        print(f"=== Deployment Success ===")
         print(f"Deployment URL: {deploy_url}")
     except Exception as e:
         print(f"=== Deployment Failed: {e} ===")
