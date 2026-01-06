@@ -4,21 +4,80 @@ import subprocess
 import sys
 import mimetypes
 import boto3
+import psycopg2
+from urllib.parse import urlparse
 from botocore.exceptions import NoCredentialsError
 
-"""TODO
-1. DB 업데이트 로직 추가 (배포 상태, S3 경로 등)
-2. SQS 메시지 파싱 로직 추가
-"""
-
-# 실제 환경에서는 환경변수나 SQS payload 파싱해서 받아야 함 ! Task 정의 등
+# EventBridge Pipes override로 전달되는 환경변수
 REPO_URL = os.environ.get('REPO_URL')
 USER_ID = os.environ.get('USER_ID')
 DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 PROJECT_ROOT = "/app/source"
 
+# DB 연결 (Task Definition에서 SSM으로 주입됨)
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
 s3 = boto3.client('s3')
+
+
+# =============================================================================
+# DB 업데이트 함수들
+# =============================================================================
+
+def get_db_connection():
+    """DATABASE_URL 파싱 후 PostgreSQL 연결 생성"""
+    parsed = urlparse(DATABASE_URL)
+    return psycopg2.connect(
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        dbname=parsed.path[1:],  # /dbname -> dbname
+        user=parsed.username,
+        password=parsed.password
+    )
+
+def update_deployment_status(status: str, commit_hash: str = None):
+    """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
+    print(f"[DB] Updating deployment status: {status}")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            if commit_hash:
+                cur.execute(
+                    """
+                    UPDATE deployments
+                    SET status = %s, commit_hash = %s
+                    WHERE deployment_id = %s
+                    """,
+                    (status, commit_hash, DEPLOYMENT_ID)
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE deployments
+                    SET status = %s
+                    WHERE deployment_id = %s
+                    """,
+                    (status, DEPLOYMENT_ID)
+                )
+        conn.commit()
+        print(f"[DB] Status updated to: {status}")
+    except Exception as e:
+        print(f"[DB Error] Failed to update status: {e}")
+        raise
+    finally:
+        conn.close()
+
+def get_commit_hash():
+    """현재 clone된 repo의 최신 commit hash 가져오기 (7자리)"""
+    result = subprocess.run(
+        ["git", "rev-parse", "--short=7", "HEAD"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True
+    )
+    return result.stdout.strip()
 
 def run_command(command, cwd=None):
 
@@ -135,24 +194,42 @@ def print_debug_env():
 def main():
     try:
         print_debug_env()
-        clone_repo()
 
-        # 정적 사이트 vs Node.js 프로젝트 분기 처리
+        # 1. 상태: BUILDING
+        update_deployment_status('BUILDING')
+
+        # 2. Git clone
+        clone_repo()
+        commit_hash = get_commit_hash()
+        print(f"[Git] Commit hash: {commit_hash}")
+
+        # 3. 빌드 (정적 사이트 vs Node.js 프로젝트)
         if is_static_site():
             print("--- Static Site Detected (No package.json) ---")
             print("Skipping install & build steps...")
-            build_output_path = PROJECT_ROOT  # 프로젝트 루트가 곧 결과물
+            build_output_path = PROJECT_ROOT
         else:
             install_dependencies_and_build()
             build_output_path = find_build_output()
 
+        # 4. S3 업로드
         upload_to_s3(build_output_path)
+
+        # 5. 상태: SUCCESS + commit_hash
+        update_deployment_status('SUCCESS', commit_hash)
+
         deploy_url = get_deploy_url()
         print(f"=== Deployment Success ===")
         print(f"Deployment URL: {deploy_url}")
+
     except Exception as e:
         print(f"=== Deployment Failed: {e} ===")
-        sys.exit(1) # 실패하면 1로 종료하기
+        # 실패 시 FAILED 상태로 업데이트
+        try:
+            update_deployment_status('FAILED')
+        except:
+            print("[DB] Failed to update status to FAILED")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
