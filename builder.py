@@ -6,25 +6,55 @@ import mimetypes
 import boto3
 import psycopg2
 from urllib.parse import urlparse
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import NoCredentialsError, ClientError
+
 
 # EventBridge Pipes override로 전달되는 환경변수
 REPO_URL = os.environ.get('REPO_URL')
 USER_ID = os.environ.get('USER_ID')
+USERNAME = os.environ.get('USERNAME')
 DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
 
 # Task Definition에서 주입되는 환경변수
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
-PROJECT_ROOT = "/app/source"
 DATABASE_URL = os.environ.get('DATABASE_URL')
+KVS_ARN = os.environ.get('KVS_ARN')
+
+PROJECT_ROOT = "/app/source"
 
 s3 = boto3.client('s3')
+kvs_client = boto3.client('cloudfront-keyvaluestore')
 
 
-# =============================================================================
-# DB 업데이트 함수들
-# =============================================================================
+# -- KVS 로직
+def get_kvs_etag():
+    response = kvs_client.describe_key_value_store(KvsARN=KVS_ARN)
+    return response['ETag']
 
+
+def generate_subdomain():
+    return f"{USERNAME}-{DEPLOYMENT_ID[:7]}"
+
+
+def update_kvs_mapping(subdomain: str, s3_path_prefix: str):
+    """KVS에 서브도메인 -> S3 경로 매핑 추가"""
+    print(f"[KVS] Updating mapping: {subdomain} -> {s3_path_prefix}")
+    
+    try:
+        etag = get_kvs_etag()
+        kvs_client.put_key(
+            KvsARN=KVS_ARN,
+            Key=subdomain,
+            Value=s3_path_prefix,
+            IfMatch=etag
+        )
+        print(f"[KVS] Mapping created successfully")
+    except ClientError as e:
+        print(f"[KVS Error] {e}")
+        raise
+
+
+# -- DB 로직
 def get_db_connection():
     """DATABASE_URL 파싱 후 PostgreSQL 연결 생성"""
     parsed = urlparse(DATABASE_URL)
@@ -36,21 +66,21 @@ def get_db_connection():
         password=parsed.password
     )
 
-def update_deployment_status(status: str, commit_hash: str = None):
+def update_deployment_status(status: str, subdomain: str = None):
     """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
     print(f"[DB] Updating deployment status: {status}")
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            if commit_hash:
+            if subdomain:
                 cur.execute(
                     """
                     UPDATE deployments
-                    SET status = %s, commit_hash = %s
+                    SET status = %s, domain = %s
                     WHERE deployment_id = %s
                     """,
-                    (status, commit_hash, DEPLOYMENT_ID)
+                    (status, subdomain, DEPLOYMENT_ID)
                 )
             else:
                 cur.execute(
@@ -68,16 +98,6 @@ def update_deployment_status(status: str, commit_hash: str = None):
         raise
     finally:
         conn.close()
-
-def get_commit_hash():
-    """현재 clone된 repo의 최신 commit hash 가져오기 (7자리)"""
-    result = subprocess.run(
-        ["git", "rev-parse", "--short=7", "HEAD"],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True
-    )
-    return result.stdout.strip()
 
 def run_command(command, cwd=None):
 
@@ -97,6 +117,8 @@ def run_command(command, cwd=None):
         print(f"[Error] Stderr: {e.stderr}")
         raise e
 
+
+# -- 빌드 로직
 # git clone 하는 함수
 def clone_repo():
     print("--- Step 1: Cloning Repository ---")
@@ -181,8 +203,6 @@ def upload_to_s3(local_path):
                 print("AWS Credentials not found")
                 raise
 
-def get_deploy_url():
-    return f"https://{USER_ID}-{DEPLOYMENT_ID}.qw1k.cloud"
 
 def print_debug_env():
     print("=== [DEBUG] Current Environment Variables ===")
@@ -190,6 +210,7 @@ def print_debug_env():
 
     print(json.dumps(debug_env, indent=2))
     print("===========================================")
+
 
 def main():
     try:
@@ -200,8 +221,6 @@ def main():
 
         # 2. Git clone
         clone_repo()
-        commit_hash = get_commit_hash()
-        print(f"[Git] Commit hash: {commit_hash}")
 
         # 3. 빌드 (정적 사이트 vs Node.js 프로젝트)
         if is_static_site():
@@ -215,10 +234,15 @@ def main():
         # 4. S3 업로드
         upload_to_s3(build_output_path)
 
-        # 5. 상태: SUCCESS + commit_hash
-        update_deployment_status('SUCCESS', commit_hash)
+        # KVS 매핑 업데이트
+        subdomain = generate_subdomain()
+        s3_path_prefix = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+        update_kvs_mapping(subdomain, s3_path_prefix)
+        
+        # 6. 상태: SUCCESS + subdomain
+        update_deployment_status('SUCCESS', subdomain)
 
-        deploy_url = get_deploy_url()
+        deploy_url = f"https://{subdomain}.qw1k.cloud"
         print(f"=== Deployment Success ===")
         print(f"Deployment URL: {deploy_url}")
 
