@@ -4,21 +4,100 @@ import subprocess
 import sys
 import mimetypes
 import boto3
-from botocore.exceptions import NoCredentialsError
+import psycopg2
+from urllib.parse import urlparse
+from botocore.exceptions import NoCredentialsError, ClientError
 
-"""TODO
-1. DB 업데이트 로직 추가 (배포 상태, S3 경로 등)
-2. SQS 메시지 파싱 로직 추가
-"""
 
-# 실제 환경에서는 환경변수나 SQS payload 파싱해서 받아야 함 ! Task 정의 등
+# EventBridge Pipes override로 전달되는 환경변수
 REPO_URL = os.environ.get('REPO_URL')
 USER_ID = os.environ.get('USER_ID')
+USERNAME = os.environ.get('USERNAME')
 DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
+
+# Task Definition에서 주입되는 환경변수
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
+DATABASE_URL = os.environ.get('DATABASE_URL')
+KVS_ARN = os.environ.get('KVS_ARN')
+
 PROJECT_ROOT = "/app/source"
 
 s3 = boto3.client('s3')
+kvs_client = boto3.client('cloudfront-keyvaluestore')
+
+
+# -- KVS 로직
+def get_kvs_etag():
+    response = kvs_client.describe_key_value_store(KvsARN=KVS_ARN)
+    return response['ETag']
+
+
+def generate_subdomain():
+    return f"{USERNAME}-{DEPLOYMENT_ID[:7]}"
+
+
+def update_kvs_mapping(subdomain: str, s3_path_prefix: str):
+    """KVS에 서브도메인 -> S3 경로 매핑 추가"""
+    print(f"[KVS] Updating mapping: {subdomain} -> {s3_path_prefix}")
+    
+    try:
+        etag = get_kvs_etag()
+        kvs_client.put_key(
+            KvsARN=KVS_ARN,
+            Key=subdomain,
+            Value=s3_path_prefix,
+            IfMatch=etag
+        )
+        print(f"[KVS] Mapping created successfully")
+    except ClientError as e:
+        print(f"[KVS Error] {e}")
+        raise
+
+
+# -- DB 로직
+def get_db_connection():
+    """DATABASE_URL 파싱 후 PostgreSQL 연결 생성"""
+    parsed = urlparse(DATABASE_URL)
+    return psycopg2.connect(
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        dbname=parsed.path[1:],  # /dbname -> dbname
+        user=parsed.username,
+        password=parsed.password
+    )
+
+def update_deployment_status(status: str, subdomain: str = None):
+    """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
+    print(f"[DB] Updating deployment status: {status}")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            if subdomain:
+                cur.execute(
+                    """
+                    UPDATE deployments
+                    SET status = %s, domain = %s
+                    WHERE deployment_id = %s
+                    """,
+                    (status, subdomain, DEPLOYMENT_ID)
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE deployments
+                    SET status = %s
+                    WHERE deployment_id = %s
+                    """,
+                    (status, DEPLOYMENT_ID)
+                )
+        conn.commit()
+        print(f"[DB] Status updated to: {status}")
+    except Exception as e:
+        print(f"[DB Error] Failed to update status: {e}")
+        raise
+    finally:
+        conn.close()
 
 def run_command(command, cwd=None):
 
@@ -38,6 +117,8 @@ def run_command(command, cwd=None):
         print(f"[Error] Stderr: {e.stderr}")
         raise e
 
+
+# -- 빌드 로직
 # git clone 하는 함수
 def clone_repo():
     print("--- Step 1: Cloning Repository ---")
@@ -122,8 +203,6 @@ def upload_to_s3(local_path):
                 print("AWS Credentials not found")
                 raise
 
-def get_deploy_url():
-    return f"https://{USER_ID}-{DEPLOYMENT_ID}.qw1k.cloud"
 
 def print_debug_env():
     print("=== [DEBUG] Current Environment Variables ===")
@@ -132,27 +211,49 @@ def print_debug_env():
     print(json.dumps(debug_env, indent=2))
     print("===========================================")
 
+
 def main():
     try:
         print_debug_env()
+
+        # 1. 상태: BUILDING
+        update_deployment_status('BUILDING')
+
+        # 2. Git clone
         clone_repo()
 
-        # 정적 사이트 vs Node.js 프로젝트 분기 처리
+        # 3. 빌드 (정적 사이트 vs Node.js 프로젝트)
         if is_static_site():
             print("--- Static Site Detected (No package.json) ---")
             print("Skipping install & build steps...")
-            build_output_path = PROJECT_ROOT  # 프로젝트 루트가 곧 결과물
+            build_output_path = PROJECT_ROOT
         else:
             install_dependencies_and_build()
             build_output_path = find_build_output()
 
+        # 4. S3 업로드
         upload_to_s3(build_output_path)
-        deploy_url = get_deploy_url()
+
+        # KVS 매핑 업데이트
+        subdomain = generate_subdomain()
+        s3_path_prefix = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+        update_kvs_mapping(subdomain, s3_path_prefix)
+        
+        # 6. 상태: SUCCESS + subdomain
+        update_deployment_status('SUCCESS', subdomain)
+
+        deploy_url = f"https://{subdomain}.qw1k.cloud"
         print(f"=== Deployment Success ===")
         print(f"Deployment URL: {deploy_url}")
+
     except Exception as e:
         print(f"=== Deployment Failed: {e} ===")
-        sys.exit(1) # 실패하면 1로 종료하기
+        # 실패 시 FAILED 상태로 업데이트
+        try:
+            update_deployment_status('FAILED')
+        except:
+            print("[DB] Failed to update status to FAILED")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
