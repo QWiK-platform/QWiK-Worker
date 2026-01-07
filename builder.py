@@ -12,10 +12,10 @@ from botocore.exceptions import NoCredentialsError
 REPO_URL = os.environ.get('REPO_URL')
 USER_ID = os.environ.get('USER_ID')
 DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
+
+# Task Definition에서 주입되는 환경변수
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 PROJECT_ROOT = "/app/source"
-
-# DB 연결 (Task Definition에서 SSM으로 주입됨)
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 s3 = boto3.client('s3')
