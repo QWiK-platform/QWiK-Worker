@@ -78,7 +78,9 @@ def update_deployment_status(status: str, subdomain: str = None):
                     """
                     UPDATE projects
                     SET status = %s, domain = %s
-                    WHERE deployment_id = %s
+                    FROM deployments
+                    WHERE projects.id = deployments.project_id
+                    AND deployments.deployment_id = %s
                     """,
                     (status, subdomain, DEPLOYMENT_ID)
                 )
