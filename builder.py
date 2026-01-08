@@ -88,12 +88,12 @@ def update_deployment_status(status: str, subdomain: str = None):
                 cur.execute(
                     """
                     UPDATE projects
-                    SET status = %s, domain = %s
+                    SET status = TRUE, domain = %s
                     FROM deployments
                     WHERE projects.project_id = deployments.project_id
                     AND deployments.deployment_id = %s
                     """,
-                    (status, subdomain, DEPLOYMENT_ID)
+                    (subdomain, DEPLOYMENT_ID)
                 )
             else:
                 cur.execute(
