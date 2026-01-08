@@ -73,13 +73,24 @@ def update_deployment_status(status: str, subdomain: str = None):
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            # Deployment 상태 업데이트
+            cur.execute(
+                """
+                UPDATE deployments
+                SET status = %s
+                WHERE deployment_id = %s
+                """,
+                (status, DEPLOYMENT_ID)
+            )
+
+            # 성공 시 프로젝트의 도메인도 업데이트
             if subdomain:
                 cur.execute(
                     """
                     UPDATE projects
                     SET status = %s, domain = %s
                     FROM deployments
-                    WHERE projects.id = deployments.project_id
+                    WHERE projects.project_id = deployments.project_id
                     AND deployments.deployment_id = %s
                     """,
                     (status, subdomain, DEPLOYMENT_ID)
