@@ -76,7 +76,7 @@ def update_deployment_status(status: str, subdomain: str = None):
             if subdomain:
                 cur.execute(
                     """
-                    UPDATE deployments
+                    UPDATE projects
                     SET status = %s, domain = %s
                     WHERE deployment_id = %s
                     """,
@@ -236,7 +236,7 @@ def main():
 
         # KVS 매핑 업데이트
         subdomain = generate_subdomain()
-        s3_path_prefix = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+        s3_path_prefix = f"/users/{USER_ID}/{DEPLOYMENT_ID}"
         update_kvs_mapping(subdomain, s3_path_prefix)
         
         # 6. 상태: SUCCESS + subdomain
