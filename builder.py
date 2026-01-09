@@ -66,7 +66,7 @@ def get_db_connection():
         password=parsed.password
     )
 
-def update_deployment_status(status: str, subdomain: str = None):
+def update_deployment_status(status: str, subdomain: str = None, s3_path: str = None):
     """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
     print(f"[DB] Updating deployment status: {status}")
 
@@ -83,26 +83,17 @@ def update_deployment_status(status: str, subdomain: str = None):
                 (status, DEPLOYMENT_ID)
             )
 
-            # 성공 시 프로젝트의 도메인도 업데이트
-            if subdomain:
+            # 성공 시 프로젝트의 도메인과 s3_path 업데이트
+            if subdomain and s3_path:
                 cur.execute(
                     """
                     UPDATE projects
-                    SET status = TRUE, domain = %s
+                    SET status = TRUE, domain = %s, s3_path = %s
                     FROM deployments
                     WHERE projects.project_id = deployments.project_id
                     AND deployments.deployment_id = %s
                     """,
-                    (subdomain, DEPLOYMENT_ID)
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE deployments
-                    SET status = %s
-                    WHERE deployment_id = %s
-                    """,
-                    (status, DEPLOYMENT_ID)
+                    (subdomain, s3_path, DEPLOYMENT_ID)
                 )
         conn.commit()
         print(f"[DB] Status updated to: {status}")
@@ -249,11 +240,11 @@ def main():
 
         # KVS 매핑 업데이트
         subdomain = generate_subdomain()
-        s3_path_prefix = f"/users/{USER_ID}/{DEPLOYMENT_ID}"
-        update_kvs_mapping(subdomain, s3_path_prefix)
-        
-        # 6. 상태: SUCCESS + subdomain
-        update_deployment_status('SUCCESS', subdomain)
+        s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+        update_kvs_mapping(subdomain, f"/{s3_path}")
+
+        # 6. 상태: SUCCESS + subdomain + s3_path
+        update_deployment_status('SUCCESS', subdomain, s3_path)
 
         deploy_url = f"https://{subdomain}.qw1k.cloud"
         print(f"=== Deployment Success ===")
