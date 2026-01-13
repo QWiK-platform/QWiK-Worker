@@ -155,13 +155,9 @@ def install_dependencies_and_build():
         run_command(["pnpm", "build"], cwd=cwd)
 
     else:
-        # 기본값: npm (package-lock.json이 있거나 아무것도 없는 경우)
+        # 기본값: npm 
         print("Detected: npm")
-        if os.path.exists(os.path.join(cwd, 'package-lock.json')):
-            run_command(["npm", "ci"], cwd=cwd) # Lock 파일 기반 클린 설치
-        else:
-            run_command(["npm", "install"], cwd=cwd) # Lock 파일 없을 때
-
+        run_command(["npm", "install"], cwd=cwd)
         run_command(["npm", "run", "build"], cwd=cwd)
 
 # 빌드 산출물 디렉토리 찾는 함수
