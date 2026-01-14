@@ -1,4 +1,4 @@
 GitPython==3.1.43
 boto3==1.35.76
-botocore[crt]>=1.33.0
+botocore[crt]==1.35.76
 psycopg2-binary==2.9.9
