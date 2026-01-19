@@ -264,7 +264,7 @@ def main():
             subdomain = generate_subdomain()
             s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
             update_kvs_mapping(subdomain, f"/{s3_path}")
-            update_deployment_status('Success', subdomain, s3_path)
+            update_deployment_status('SUCCESS', subdomain, s3_path)
             deploy_url = f"https://{subdomain}.qw1k.cloud"
 
         print(f"=== Deployment Success ===")
