@@ -19,11 +19,13 @@ DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 DATABASE_URL = os.environ.get('DATABASE_URL')
 KVS_ARN = os.environ.get('KVS_ARN')
+DISTRIBUTION_ID = os.environ.get('DISTRIBUTION_ID')
 
 PROJECT_ROOT = "/app/source"
 
 s3 = boto3.client('s3')
 kvs_client = boto3.client('cloudfront-keyvaluestore')
+cf_client = boto3.client('cloudfront')
 
 
 # -- KVS 로직
@@ -51,6 +53,28 @@ def update_kvs_mapping(subdomain: str, s3_path_prefix: str):
         print(f"[KVS] Mapping created successfully")
     except ClientError as e:
         print(f"[KVS Error] {e}")
+        raise
+
+
+def invalidate_cache(s3_path: str):
+    """CloudFront 캐시 무효화 (특정 경로만)"""
+    invalidation_path = f"/{s3_path}/*"
+    print(f"[CloudFront] Invalidating cache: {invalidation_path}")
+
+    try:
+        cf_client.create_invalidation(
+            DistributionId=DISTRIBUTION_ID,
+            InvalidationBatch={
+                'Paths': {
+                    'Quantity': 1,
+                    'Items': [invalidation_path]
+                },
+                'CallerReference': f"{DEPLOYMENT_ID}-{int(__import__('time').time())}"
+            }
+        )
+        print(f"[CloudFront] Cache invalidation requested")
+    except ClientError as e:
+        print(f"[CloudFront Error] {e}")
         raise
 
 
@@ -257,6 +281,8 @@ def main():
         if existing_domain:
             # 재배포: KVS/DB 업데이트 스킵, status만 업데이트
             print(f"[Redeploy] Existing domain: {existing_domain}")
+            s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+            invalidate_cache(s3_path)
             update_deployment_status('SUCCESS')
             deploy_url = f"https://{existing_domain}.qw1k.cloud"
         else:
