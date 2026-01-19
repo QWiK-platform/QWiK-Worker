@@ -66,8 +66,25 @@ def get_db_connection():
         password=parsed.password
     )
 
+
+def get_existing_domain():
+    """프로젝트에 이미 도메인이 있는지 확인 (재배포 여부 판단)"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT p.domain
+                FROM projects p
+                JOIN deployments d ON p.project_id = d.project_id
+                WHERE d.deployment_id = %s
+            """, (DEPLOYMENT_ID,))
+            result = cur.fetchone()
+            return result[0] if result and result[0] else None
+    finally:
+        conn.close()
+
 def update_deployment_status(status: str, subdomain: str = None, s3_path: str = None):
-    """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
+    """Deployment 상태 업데이트 (Building, Success, Failed)"""
     print(f"[DB] Updating deployment status: {status}")
 
     conn = get_db_connection()
@@ -83,7 +100,7 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                 (status, DEPLOYMENT_ID)
             )
 
-            # 성공 시 프로젝트의 도메인과 s3_path 업데이트
+            # 첫 배포: 도메인과 s3_path 업데이트
             if subdomain and s3_path:
                 cur.execute(
                     """
@@ -216,8 +233,8 @@ def main():
     try:
         print_debug_env()
 
-        # 1. 상태: BUILDING
-        update_deployment_status('BUILDING')
+        # 1. 상태: Building
+        update_deployment_status('Building')
 
         # 2. Git clone
         clone_repo()
@@ -234,25 +251,32 @@ def main():
         # 4. S3 업로드
         upload_to_s3(build_output_path)
 
-        # KVS 매핑 업데이트
-        subdomain = generate_subdomain()
-        s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
-        update_kvs_mapping(subdomain, f"/{s3_path}")
+        # 5. 기존 도메인 확인 (첫 배포 vs 재배포)
+        existing_domain = get_existing_domain()
 
-        # 6. 상태: SUCCESS + subdomain + s3_path
-        update_deployment_status('SUCCESS', subdomain, s3_path)
+        if existing_domain:
+            # 재배포: KVS/DB 업데이트 스킵, status만 업데이트
+            print(f"[Redeploy] Existing domain: {existing_domain}")
+            update_deployment_status('Success')
+            deploy_url = f"https://{existing_domain}.qw1k.cloud"
+        else:
+            # 첫 배포: 임시 subdomain 생성 + KVS/DB 업데이트
+            subdomain = generate_subdomain()
+            s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+            update_kvs_mapping(subdomain, f"/{s3_path}")
+            update_deployment_status('Success', subdomain, s3_path)
+            deploy_url = f"https://{subdomain}.qw1k.cloud"
 
-        deploy_url = f"https://{subdomain}.qw1k.cloud"
         print(f"=== Deployment Success ===")
         print(f"Deployment URL: {deploy_url}")
 
     except Exception as e:
         print(f"=== Deployment Failed: {e} ===")
-        # 실패 시 FAILED 상태로 업데이트
+        # 실패 시 Failed 상태로 업데이트
         try:
-            update_deployment_status('FAILED')
+            update_deployment_status('Failed')
         except:
-            print("[DB] Failed to update status to FAILED")
+            print("[DB] Failed to update status to Failed")
         sys.exit(1)
 
 if __name__ == "__main__":
