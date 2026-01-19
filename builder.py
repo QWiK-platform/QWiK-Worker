@@ -84,7 +84,7 @@ def get_existing_domain():
         conn.close()
 
 def update_deployment_status(status: str, subdomain: str = None, s3_path: str = None):
-    """Deployment 상태 업데이트 (Building, Success, Failed)"""
+    """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
     print(f"[DB] Updating deployment status: {status}")
 
     conn = get_db_connection()
@@ -233,8 +233,8 @@ def main():
     try:
         print_debug_env()
 
-        # 1. 상태: Building
-        update_deployment_status('Building')
+        # 1. 상태: BUILDING
+        update_deployment_status('BUILDING')
 
         # 2. Git clone
         clone_repo()
@@ -257,7 +257,7 @@ def main():
         if existing_domain:
             # 재배포: KVS/DB 업데이트 스킵, status만 업데이트
             print(f"[Redeploy] Existing domain: {existing_domain}")
-            update_deployment_status('Success')
+            update_deployment_status('SUCCESS')
             deploy_url = f"https://{existing_domain}.qw1k.cloud"
         else:
             # 첫 배포: 임시 subdomain 생성 + KVS/DB 업데이트
@@ -274,9 +274,9 @@ def main():
         print(f"=== Deployment Failed: {e} ===")
         # 실패 시 Failed 상태로 업데이트
         try:
-            update_deployment_status('Failed')
+            update_deployment_status('FAILED')
         except:
-            print("[DB] Failed to update status to Failed")
+            print("[DB] Failed to update status to FAILED")
         sys.exit(1)
 
 if __name__ == "__main__":
