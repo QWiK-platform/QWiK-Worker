@@ -136,6 +136,19 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                     """,
                     (subdomain, s3_path, DEPLOYMENT_ID)
                 )
+
+            # 실패 시: projects.status = FALSE
+            if status == 'FAILED':
+                cur.execute(
+                    """
+                    UPDATE projects
+                    SET status = FALSE
+                    FROM deployments
+                    WHERE projects.project_id = deployments.project_id
+                    AND deployments.deployment_id = %s
+                    """,
+                    (DEPLOYMENT_ID,)
+                )
         conn.commit()
         print(f"[DB] Status updated to: {status}")
     except Exception as e:
