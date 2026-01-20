@@ -137,6 +137,19 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                     (subdomain, s3_path, DEPLOYMENT_ID)
                 )
 
+            # 재배포 성공 시: projects.status = TRUE (subdomain/s3_path 없이 SUCCESS인 경우)
+            if status == 'SUCCESS' and not subdomain and not s3_path:
+                cur.execute(
+                    """
+                    UPDATE projects
+                    SET status = TRUE
+                    FROM deployments
+                    WHERE projects.project_id = deployments.project_id
+                    AND deployments.deployment_id = %s
+                    """,
+                    (DEPLOYMENT_ID,)
+                )
+
             # 실패 시: projects.status = FALSE
             if status == 'FAILED':
                 cur.execute(
