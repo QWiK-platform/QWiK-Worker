@@ -234,10 +234,26 @@ def find_build_output():
             
     raise FileNotFoundError("Could not find build output directory (dist/build).")
 
+def clear_s3_path(s3_path_prefix: str):
+    """S3 경로 내 기존 파일 삭제"""
+    print(f"[S3] Clearing existing files: {s3_path_prefix}")
+
+    paginator = s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=S3_BUCKET_NAME, Prefix=s3_path_prefix):
+        if 'Contents' in page:
+            objects = [{'Key': obj['Key']} for obj in page['Contents']]
+            s3.delete_objects(Bucket=S3_BUCKET_NAME, Delete={'Objects': objects})
+            print(f"[S3] Deleted {len(objects)} objects")
+
+
 # s3에 업로드하는 함수
 def upload_to_s3(local_path):
     print("--- Step 5: Uploading to S3 ---")
-    
+
+    # 기존 파일 삭제
+    s3_path_prefix = f"users/{USER_ID}/{PROJECT_ID}"
+    clear_s3_path(s3_path_prefix)
+
     for root, dirs, files in os.walk(local_path):
         for file in files:
             local_file_path = os.path.join(root, file)
