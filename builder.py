@@ -13,6 +13,7 @@ from botocore.exceptions import NoCredentialsError, ClientError
 REPO_URL = os.environ.get('REPO_URL')
 USER_ID = os.environ.get('USER_ID')
 USERNAME = os.environ.get('USERNAME')
+PROJECT_ID = os.environ.get('PROJECT_ID')
 DEPLOYMENT_ID = os.environ.get('DEPLOYMENT_ID')
 
 # Task Definition에서 주입되는 환경변수
@@ -35,7 +36,7 @@ def get_kvs_etag():
 
 
 def generate_subdomain():
-    return f"{USERNAME}-{DEPLOYMENT_ID[:7]}"
+    return f"{USERNAME}-{PROJECT_ID[:7]}"
 
 
 def update_kvs_mapping(subdomain: str, s3_path_prefix: str):
@@ -69,7 +70,7 @@ def invalidate_cache(s3_path: str):
                     'Quantity': 1,
                     'Items': [invalidation_path]
                 },
-                'CallerReference': f"{DEPLOYMENT_ID}-{int(__import__('time').time())}"
+                'CallerReference': f"{PROJECT_ID}-{int(__import__('time').time())}"
             }
         )
         print(f"[CloudFront] Cache invalidation requested")
@@ -97,11 +98,10 @@ def get_existing_domain():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT p.domain
-                FROM projects p
-                JOIN deployments d ON p.project_id = d.project_id
-                WHERE d.deployment_id = %s
-            """, (DEPLOYMENT_ID,))
+                SELECT domain
+                FROM projects
+                WHERE project_id = %s
+            """, (PROJECT_ID,))
             result = cur.fetchone()
             return result[0] if result and result[0] else None
     finally:
@@ -130,11 +130,9 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                     """
                     UPDATE projects
                     SET status = TRUE, domain = %s, s3_path = %s
-                    FROM deployments
-                    WHERE projects.project_id = deployments.project_id
-                    AND deployments.deployment_id = %s
+                    WHERE project_id = %s
                     """,
-                    (subdomain, s3_path, DEPLOYMENT_ID)
+                    (subdomain, s3_path, PROJECT_ID)
                 )
 
             # 재배포 성공 시: projects.status = TRUE (subdomain/s3_path 없이 SUCCESS인 경우)
@@ -143,11 +141,9 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                     """
                     UPDATE projects
                     SET status = TRUE
-                    FROM deployments
-                    WHERE projects.project_id = deployments.project_id
-                    AND deployments.deployment_id = %s
+                    WHERE project_id = %s
                     """,
-                    (DEPLOYMENT_ID,)
+                    (PROJECT_ID,)
                 )
 
             # 실패 시: projects.status = FALSE
@@ -156,11 +152,9 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                     """
                     UPDATE projects
                     SET status = FALSE
-                    FROM deployments
-                    WHERE projects.project_id = deployments.project_id
-                    AND deployments.deployment_id = %s
+                    WHERE project_id = %s
                     """,
-                    (DEPLOYMENT_ID,)
+                    (PROJECT_ID,)
                 )
         conn.commit()
         print(f"[DB] Status updated to: {status}")
@@ -251,7 +245,7 @@ def upload_to_s3(local_path):
             relative_path = os.path.relpath(local_file_path, local_path)
             
             # 이게 우리 DB에 들어갈 s3_path 
-            s3_key = f"users/{USER_ID}/{DEPLOYMENT_ID}/{relative_path}"
+            s3_key = f"users/{USER_ID}/{PROJECT_ID}/{relative_path}"
             
             content_type, _ = mimetypes.guess_type(local_file_path)
             if content_type is None:
@@ -307,14 +301,14 @@ def main():
         if existing_domain:
             # 재배포: KVS/DB 업데이트 스킵, status만 업데이트
             print(f"[Redeploy] Existing domain: {existing_domain}")
-            s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+            s3_path = f"users/{USER_ID}/{PROJECT_ID}"
             invalidate_cache(s3_path)
             update_deployment_status('SUCCESS')
             deploy_url = f"https://{existing_domain}.qw1k.cloud"
         else:
             # 첫 배포: 임시 subdomain 생성 + KVS/DB 업데이트
             subdomain = generate_subdomain()
-            s3_path = f"users/{USER_ID}/{DEPLOYMENT_ID}"
+            s3_path = f"users/{USER_ID}/{PROJECT_ID}"
             update_kvs_mapping(subdomain, f"/{s3_path}")
             update_deployment_status('SUCCESS', subdomain, s3_path)
             deploy_url = f"https://{subdomain}.qw1k.cloud"
