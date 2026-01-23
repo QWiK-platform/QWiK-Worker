@@ -164,6 +164,35 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
     finally:
         conn.close()
 
+
+def get_directory_size(path: str) -> int:
+    """디렉토리 총 용량 계산 (bytes)"""
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            total += os.path.getsize(os.path.join(root, file))
+    return total
+
+
+def update_storage_usage(size_bytes: int):
+    """프로젝트 스토리지 사용량 업데이트"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE usage
+                SET storage_used = %s
+                WHERE project_id = %s
+            """, (size_bytes, PROJECT_ID))
+        conn.commit()
+        print(f"[DB] Storage usage updated: {size_bytes} bytes ({size_bytes / 1024 / 1024:.2f} MB)")
+    except Exception as e:
+        print(f"[DB Error] Failed to update storage usage: {e}")
+        raise
+    finally:
+        conn.close()
+
+
 def run_command(command, cwd=None):
 
     print(f"[Process] Executing: {' '.join(command)}")
@@ -308,10 +337,14 @@ def main():
             install_dependencies_and_build()
             build_output_path = find_build_output()
 
-        # 4. S3 업로드
+        # 4. 빌드 결과물 용량 계산 및 저장
+        build_size = get_directory_size(build_output_path)
+        update_storage_usage(build_size)
+
+        # 5. S3 업로드
         upload_to_s3(build_output_path)
 
-        # 5. 기존 도메인 확인 (첫 배포 vs 재배포)
+        # 6. 기존 도메인 확인 (첫 배포 vs 재배포)
         existing_domain = get_existing_domain()
 
         if existing_domain:
