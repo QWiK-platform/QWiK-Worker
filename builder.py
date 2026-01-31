@@ -194,16 +194,14 @@ def update_storage_usage(size_bytes: int):
 def run_command(command, cwd=None):
     print(f"Executing: {' '.join(command)}")
     try:
-        result = subprocess.run(
+        subprocess.run(
             command,
             cwd=cwd,
-            check=True,          # Exit Code가 0이 아니면 CalledProcessError 발생
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True
         )
-        if result.stdout.strip():
-            print(result.stdout)
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] Command failed (exit code {e.returncode})")
         print(f"[ERROR] {e.stderr}")
