@@ -42,7 +42,7 @@ def generate_subdomain():
 def update_kvs_mapping(subdomain: str, s3_path_prefix: str):
     """KVS에 서브도메인 -> S3 경로 매핑 추가"""
     print(f"[KVS] Updating mapping: {subdomain} -> {s3_path_prefix}")
-    
+
     try:
         etag = get_kvs_etag()
         kvs_client.put_key(
@@ -51,16 +51,15 @@ def update_kvs_mapping(subdomain: str, s3_path_prefix: str):
             Value=s3_path_prefix,
             IfMatch=etag
         )
-        print(f"[KVS] Mapping created successfully")
+        print("[KVS] Mapping created")
     except ClientError as e:
-        print(f"[KVS Error] {e}")
+        print(f"[ERROR] [KVS] {e}")
         raise
 
 
 def invalidate_cache(s3_path: str):
     """CloudFront 캐시 무효화 (특정 경로만)"""
     invalidation_path = f"/{s3_path}/*"
-    print(f"[CloudFront] Invalidating cache: {invalidation_path}")
 
     try:
         cf_client.create_invalidation(
@@ -73,9 +72,9 @@ def invalidate_cache(s3_path: str):
                 'CallerReference': f"{PROJECT_ID}-{int(__import__('time').time())}"
             }
         )
-        print(f"[CloudFront] Cache invalidation requested")
+        print("[CDN] Cache invalidation requested")
     except ClientError as e:
-        print(f"[CloudFront Error] {e}")
+        print(f"[ERROR] [CDN] {e}")
         raise
 
 
@@ -109,7 +108,6 @@ def get_existing_domain():
 
 def update_deployment_status(status: str, subdomain: str = None, s3_path: str = None):
     """Deployment 상태 업데이트 (BUILDING, SUCCESS, FAILED)"""
-    print(f"[DB] Updating deployment status: {status}")
 
     conn = get_db_connection()
     try:
@@ -157,9 +155,9 @@ def update_deployment_status(status: str, subdomain: str = None, s3_path: str = 
                     (PROJECT_ID,)
                 )
         conn.commit()
-        print(f"[DB] Status updated to: {status}")
+        print(f"[DB] Status updated: {status}")
     except Exception as e:
-        print(f"[DB Error] Failed to update status: {e}")
+        print(f"[ERROR] [DB] Failed to update status: {e}")
         raise
     finally:
         conn.close()
@@ -185,42 +183,40 @@ def update_storage_usage(size_bytes: int):
                 WHERE project_id = %s
             """, (size_bytes, PROJECT_ID))
         conn.commit()
-        print(f"[DB] Storage usage updated: {size_bytes} bytes ({size_bytes / 1024 / 1024:.2f} MB)")
+        print(f"[DB] Storage usage: {size_bytes} bytes ({size_bytes / 1024 / 1024:.2f} MB)")
     except Exception as e:
-        print(f"[DB Error] Failed to update storage usage: {e}")
+        print(f"[ERROR] [DB] Failed to update storage usage: {e}")
         raise
     finally:
         conn.close()
 
 
 def run_command(command, cwd=None):
-
-    print(f"[Process] Executing: {' '.join(command)}")
+    print(f"Executing: {' '.join(command)}")
     try:
         result = subprocess.run(
             command,
             cwd=cwd,
             check=True,          # Exit Code가 0이 아니면 CalledProcessError 발생
-            text=True,           
+            text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        print(result.stdout)
+        if result.stdout.strip():
+            print(result.stdout)
     except subprocess.CalledProcessError as e:
-        print(f"[Error] Command failed with exit code {e.returncode}")
-        print(f"[Error] Stderr: {e.stderr}")
+        print(f"[ERROR] Command failed (exit code {e.returncode})")
+        print(f"[ERROR] {e.stderr}")
         raise e
 
 
 # -- 빌드 로직
 # git clone 하는 함수
 def clone_repo():
-    print("--- Step 1: Cloning Repository ---")
     if os.path.exists(PROJECT_ROOT):
-
         import shutil
         shutil.rmtree(PROJECT_ROOT)
-    
+
     run_command(["git", "clone", REPO_URL, PROJECT_ROOT])
 
 # 정적 사이트 여부 확인 (package.json 없으면 정적 사이트)
@@ -229,38 +225,35 @@ def is_static_site():
 
 # npm, yarn, pnpm 중 하나를 감지하고 의존성 설치 및 빌드 수행하는 함수
 def install_dependencies_and_build():
-    print("--- Step 2 & 3: Detect Manager, Install & Build ---")
-
     cwd = PROJECT_ROOT
 
     # Lock 파일을 기반으로 탐지
     if os.path.exists(os.path.join(cwd, 'yarn.lock')):
-        print("Detected: Yarn")
+        print("[BUILD] Detected: yarn")
         run_command(["yarn", "install", "--frozen-lockfile"], cwd=cwd)
         run_command(["yarn", "build"], cwd=cwd)
 
     elif os.path.exists(os.path.join(cwd, 'pnpm-lock.yaml')):
-        print("Detected: pnpm")
+        print("[BUILD] Detected: pnpm")
         run_command(["pnpm", "install", "--frozen-lockfile"], cwd=cwd)
         run_command(["pnpm", "build"], cwd=cwd)
 
     else:
-        # 기본값: npm 
-        print("Detected: npm")
+        # 기본값: npm
+        print("[BUILD] Detected: npm")
         run_command(["npm", "install"], cwd=cwd)
         run_command(["npm", "run", "build"], cwd=cwd)
 
 # 빌드 산출물 디렉토리 찾는 함수
 def find_build_output():
-    print("--- Step 4: Finding Build Output Directory ---")
-    candidates = ['dist', 'build', '.next/server/pages'] # Next.js의 경우 추가 설정 필요할 수 있음
-    
+    candidates = ['dist', 'build', '.next/server/pages']  # Next.js의 경우 추가 설정 필요할 수 있음
+
     for folder in candidates:
         path = os.path.join(PROJECT_ROOT, folder)
         if os.path.exists(path) and os.path.isdir(path):
-            print(f"Build output found at: {path}")
+            print(f"[BUILD] Output directory: {path}")
             return path
-            
+
     raise FileNotFoundError("Could not find build output directory (dist/build).")
 
 def clear_s3_path(s3_path_prefix: str):
@@ -277,79 +270,72 @@ def clear_s3_path(s3_path_prefix: str):
 
 # s3에 업로드하는 함수
 def upload_to_s3(local_path):
-    print("--- Step 5: Uploading to S3 ---")
-
     # 기존 파일 삭제
     s3_path_prefix = f"users/{USER_ID}/{PROJECT_ID}"
     clear_s3_path(s3_path_prefix)
 
-    for root, dirs, files in os.walk(local_path):
+    file_count = 0
+    for root, _, files in os.walk(local_path):
         for file in files:
             local_file_path = os.path.join(root, file)
-            
             relative_path = os.path.relpath(local_file_path, local_path)
-            
-            # 이게 우리 DB에 들어갈 s3_path 
+
+            # 이게 우리 DB에 들어갈 s3_path
             s3_key = f"users/{USER_ID}/{PROJECT_ID}/{relative_path}"
-            
+
             content_type, _ = mimetypes.guess_type(local_file_path)
             if content_type is None:
                 content_type = 'application/octet-stream'
-            
-            print(f"Uploading {relative_path} -> s3://{S3_BUCKET_NAME}/{s3_key} ({content_type})")
-            
+
             try:
                 s3.upload_file(
-                    local_file_path, 
-                    S3_BUCKET_NAME, 
-                    s3_key, 
+                    local_file_path,
+                    S3_BUCKET_NAME,
+                    s3_key,
                     ExtraArgs={'ContentType': content_type}
                 )
+                file_count += 1
             except NoCredentialsError:
-                print("AWS Credentials not found")
+                print("[ERROR] [S3] AWS credentials not found")
                 raise
 
-
-def print_debug_env():
-    print("=== [DEBUG] Current Environment Variables ===")
-    debug_env = dict(os.environ)
-
-    print(json.dumps(debug_env, indent=2))
-    print("===========================================")
+    print(f"[S3] Uploaded {file_count} files")
+    return file_count
 
 
 def main():
     try:
-        print_debug_env()
-
-        # 1. 상태: BUILDING
+        print("======== START DEPLOYMENT ========")
+        print(f"[INFO] Project: {PROJECT_ID}")
+        print(f"[INFO] User: {USERNAME}")
+        print(f"[INFO] Repo: {REPO_URL}")
         update_deployment_status('BUILDING')
 
-        # 2. Git clone
+        print("======== CLONE REPOSITORY ========")
         clone_repo()
 
-        # 3. 빌드 (정적 사이트 vs Node.js 프로젝트)
+        print("======== INSTALL & BUILD ========")
         if is_static_site():
-            print("--- Static Site Detected (No package.json) ---")
-            print("Skipping install & build steps...")
+            print("[BUILD] Static site detected (no package.json)")
+            print("[BUILD] Skipping install & build")
             build_output_path = PROJECT_ROOT
         else:
             install_dependencies_and_build()
             build_output_path = find_build_output()
 
-        # 4. 빌드 결과물 용량 계산 및 저장
+        # 빌드 결과물 용량 계산 및 저장
         build_size = get_directory_size(build_output_path)
         update_storage_usage(build_size)
 
-        # 5. S3 업로드
-        upload_to_s3(build_output_path)
+        print("======== UPLOAD TO S3 ========")
+        file_count = upload_to_s3(build_output_path)
 
-        # 6. 기존 도메인 확인 (첫 배포 vs 재배포)
+        print("======== UPDATE ROUTING ========")
         existing_domain = get_existing_domain()
 
         if existing_domain:
             # 재배포: KVS/DB 업데이트 스킵, status만 업데이트
-            print(f"[Redeploy] Existing domain: {existing_domain}")
+            print(f"[ROUTING] Redeploy detected: {existing_domain}")
             s3_path = f"users/{USER_ID}/{PROJECT_ID}"
             invalidate_cache(s3_path)
             update_deployment_status('SUCCESS')
@@ -362,16 +348,17 @@ def main():
             update_deployment_status('SUCCESS', subdomain, s3_path)
             deploy_url = f"https://{subdomain}.qw1k.cloud"
 
-        print(f"=== Deployment Success ===")
-        print(f"Deployment URL: {deploy_url}")
+        print("======== DEPLOYMENT COMPLETE ========")
+        print(f"[RESULT] {deploy_url}")
+        print(f"[SUMMARY] Files: {file_count} | Size: {build_size / 1024 / 1024:.2f} MB")
 
     except Exception as e:
-        print(f"=== Deployment Failed: {e} ===")
-        # 실패 시 Failed 상태로 업데이트
+        print("======== DEPLOYMENT FAILED ========")
+        print(f"[ERROR] {e}")
         try:
             update_deployment_status('FAILED')
         except:
-            print("[DB] Failed to update status to FAILED")
+            print("[ERROR] [DB] Failed to update status to FAILED")
         sys.exit(1)
 
 if __name__ == "__main__":
